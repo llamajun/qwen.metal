@@ -17,7 +17,7 @@ cd qwen.metal
 make
 ```
 
-然后你需要下载模型权重，这里有一个我打好包的qwen1.5-0.5b-chat模型：[百度网盘](), [Google Drive]()。解压缩到qwen.metal目录下，然后运行：
+然后你需要下载模型权重，这里有一个我打好包的qwen1.5-0.5b-chat模型：[百度网盘](https://pan.baidu.com/s/19qUz9fS6HjDq0Yb-T0i_aA) (提取码: ffz3)，放到qwen.metal目录下，然后运行：
 
 ```
 make chat

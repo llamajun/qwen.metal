@@ -3,21 +3,9 @@ CFLAGS?=-O2 -g
 CC=clang
 OBJCFLAGS=-fobjc-arc
 LDFLAGS=-framework Foundation -framework Metal -framework MetalKit
-EXES=add gemv run
+EXES=run
 
 all: $(EXES)
-
-add: add.o
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
-
-add.o: add.m
-	$(CC) $(CFLAGS) $(OBJCFLAGS) -c add.m -o add.o 
-
-gemv: gemv.o llm-metal.o
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ gemv.o llm-metal.o
-
-gemv.o: gemv.c
-	$(CC) $(CFLAGS) -o $@ -c $<
 
 llm-metal.o: llm-metal.m
 	$(CC) $(CFLAGS) $(OBJCFLAGS) -o $@ -c $<
@@ -33,6 +21,9 @@ chat: run
 
 generate: run
 	./run qwen1.5-0.5b-chat -m generate -i "大模型是"
+
+stories: run
+	./run stories15M -m generate -i "Once upon a time, "
 
 lldb: run
 	lldb ./run -- qwen1.5-0.5b-chat -m chat -i "介绍一下机器学习。"

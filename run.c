@@ -309,7 +309,7 @@ float* forward(Transformer* transformer, int token, int pos) {
 // ----------------------------------------------------------------------------
 // The Byte Pair Encoding (BPE) Tokenizer that translates strings <-> tokens
 
-typedef struct {
+typedef struct {                
     int a;
     int b;
     int c;      // merge result
@@ -324,7 +324,9 @@ typedef struct {
 typedef struct {
     char **vocab;
     TokenIndex *sorted_vocab;
-    Merge *merges;
+    float *vocab_scores;        // only for llama
+    int max_token_length;       // only for llama
+    Merge *merges;              // only for qwen
     int vocab_size;
     int merge_size;
 } Tokenizer;
@@ -340,22 +342,35 @@ int compare_merge(const void *a, const void *b) {
         return ((Merge*)a)->a - ((Merge*)b)->a;
 }
 
-void build_tokenizer(Tokenizer* t, char* tokenizer_path) {
+// QWEN2 uses a merges(huggingface)-style tokenzier, while llama2.c uses sentencepiece
+// style tokenizer. So we load different data depending on model_type.
+// vocab_size is needed for original llama.c data format.
+void build_tokenizer(Tokenizer* t, char* tokenizer_path, int vocab_size) {
     FILE *file = fopen(tokenizer_path, "rb");
     if (!file) { fprintf(stderr, "couldn't load %s\n", tokenizer_path); exit(EXIT_FAILURE); }
 
     // read vocab table
-    if (fread(&t->vocab_size, sizeof(int), 1, file) != 1) { fprintf(stderr, "failed read vocab_size\n"); exit(EXIT_FAILURE); }
+    if (model_type == LLAMA2) t->vocab_size = vocab_size;
+    else if (fread(&t->vocab_size, sizeof(int), 1, file) != 1) {
+        fprintf(stderr, "failed read vocab_size\n"); 
+        exit(EXIT_FAILURE); 
+    }
     t->vocab = (char**)malloc(t->vocab_size * sizeof(char*));
+    if (model_type == LLAMA2) {
+        t->vocab_scores = (float*)malloc(vocab_size * sizeof(float));
+        if (fread(&t->max_token_length, sizeof(int), 1, file) != 1) { fprintf(stderr, "failed read\n"); exit(EXIT_FAILURE); }
+    }
     for (int i = 0; i < t->vocab_size; i++) {
-        unsigned short len;
-        if (fread(&len, sizeof(unsigned short), 1, file) != 1) {fprintf(stderr, "failed read vocab len %d\n", i); exit(EXIT_FAILURE); }
+        unsigned int len = 0;
+        if (model_type == LLAMA2 && fread(t->vocab_scores + i, sizeof(float), 1, file) != 1)
+            { fprintf(stderr, "failed read vocab score\n"); exit(EXIT_FAILURE);}
+        if (fread(&len, model_type == QWEN2 ? sizeof(unsigned short) : sizeof(int), 1, file) != 1) {fprintf(stderr, "failed read vocab len %d\n", i); exit(EXIT_FAILURE); }
         t->vocab[i] = (char *)malloc(len + 1);
-        if (fread(t->vocab[i], len, 1, file) != 1) {fprintf(stderr, "failed read vocab %d\n", i); exit(EXIT_FAILURE); }
+        if (fread(t->vocab[i], len, 1, file) != 1) {fprintf(stderr, "failed read vocab %d of len %d\n", i, len); exit(EXIT_FAILURE); }
         t->vocab[i][len] = '\0';
     }
 
-    // sort the vocabulary
+    // sort the vocabulary for efficient lookup
     t->sorted_vocab = malloc(t->vocab_size * sizeof(TokenIndex));
     for (int i = 0; i < t->vocab_size; i++) {
         t->sorted_vocab[i].str = t->vocab[i];
@@ -363,21 +378,23 @@ void build_tokenizer(Tokenizer* t, char* tokenizer_path) {
     }
     qsort(t->sorted_vocab, t->vocab_size, sizeof(TokenIndex), compare_tokens);
 
-    // read merge table
-    if (fread(&t->merge_size, sizeof(int), 1, file) != 1) { fprintf(stderr, "failed read merge_size\n"); exit(EXIT_FAILURE); }
-    t->merges = (Merge *)malloc(t->merge_size * sizeof(Merge));
-    int *merge_raw = (int *)malloc(t->merge_size * sizeof(int) * 3);
-    if (fread(merge_raw, t->merge_size * sizeof(int) * 3, 1, file) != 1) {fprintf(stderr, "failed read merge_raw\n"); exit(EXIT_FAILURE); }
-    for (int i = 0; i < t->merge_size; i++) {
-        t->merges[i].a = merge_raw[i*3];
-        t->merges[i].b = merge_raw[i*3+1];
-        t->merges[i].c = merge_raw[i*3+2];
-        t->merges[i].rank = i;
-    }
-    free(merge_raw);
+    if (model_type == QWEN2) {
+        // read merge table
+        if (fread(&t->merge_size, sizeof(int), 1, file) != 1) { fprintf(stderr, "failed read merge_size\n"); exit(EXIT_FAILURE); }
+        t->merges = (Merge *)malloc(t->merge_size * sizeof(Merge));
+        int *merge_raw = (int *)malloc(t->merge_size * sizeof(int) * 3);
+        if (fread(merge_raw, t->merge_size * sizeof(int) * 3, 1, file) != 1) {fprintf(stderr, "failed read merge_raw\n"); exit(EXIT_FAILURE); }
+        for (int i = 0; i < t->merge_size; i++) {
+            t->merges[i].a = merge_raw[i*3];
+            t->merges[i].b = merge_raw[i*3+1];
+            t->merges[i].c = merge_raw[i*3+2];
+            t->merges[i].rank = i;
+        }
+        free(merge_raw);
 
-    // sort merge table
-    qsort(t->merges, t->merge_size, sizeof(Merge), compare_merge);
+        // sort merge table
+        qsort(t->merges, t->merge_size, sizeof(Merge), compare_merge);
+    }
 
     fclose(file);
 }
@@ -387,6 +404,7 @@ void free_tokenizer(Tokenizer *t) {
     free(t->vocab);
     free(t->sorted_vocab);    
     free(t->merges);
+    if (model_type == LLAMA2) free(t->vocab_scores);
 }
 
 char* decode(Tokenizer* t, int prev_token, int token) {
@@ -495,18 +513,31 @@ void encode(Tokenizer *t, char *text, int *tokens, int *n_tokens) {
 
     // merge the best consecutive pair each iteration, according the scores in vocab_scores
     while (1) {
-        int best_rank = INT32_MAX;
+        int best_rank = INT32_MAX;      // only for qwen
+        float best_score = -1e10;       // only for llama
         int best_id = -1;
         int best_idx = -1;
 
         for (int i=0; i < (*n_tokens-1); i++) {
-            // check if we can merge the pair (tokens[i], tokens[i+1])
-            Merge merge = {tokens[i], tokens[i+1], 0};
-            Merge *res = bsearch(&merge, t->merges, t->merge_size, sizeof(Merge), compare_merge);
-            if (res && res->rank < best_rank) {
-                best_rank = res->rank;
-                best_id = res->c;
-                best_idx = i;
+            if (model_type == QWEN2) {
+                // check if we can merge the pair (tokens[i], tokens[i+1])
+                Merge merge = {tokens[i], tokens[i+1], 0};
+                Merge *res = bsearch(&merge, t->merges, t->merge_size, sizeof(Merge), compare_merge);
+                if (res && res->rank < best_rank) {
+                    best_rank = res->rank;
+                    best_id = res->c;
+                    best_idx = i;
+                }
+            } else {
+                // check if we can merge the pair (tokens[i], tokens[i+1])
+                sprintf(str_buffer, "%s%s", t->vocab[tokens[i]], t->vocab[tokens[i+1]]);
+                int id = str_lookup(str_buffer, t->sorted_vocab, t->vocab_size);
+                if (id != -1 && t->vocab_scores[id] > best_score) {
+                    // this merge pair exists in vocab! record its score and position
+                    best_score = t->vocab_scores[id];
+                    best_id = id;
+                    best_idx = i;
+                }                
             }
         }
 
@@ -525,6 +556,8 @@ void encode(Tokenizer *t, char *text, int *tokens, int *n_tokens) {
 
     // add optional EOS (=2) token, if desired
     // if (eos) tokens[(*n_tokens)++] = 2;
+    
+    free(str_buffer);
 }
 
 void dump_tokens(Tokenizer *t, int *tokens, int n_tokens) {
@@ -1010,7 +1043,7 @@ int main(int argc, char *argv[]) {
 
     // build the Tokenizer via the tokenizer .bin file
     Tokenizer tokenizer;
-    build_tokenizer(&tokenizer, tokenizer_path);
+    build_tokenizer(&tokenizer, tokenizer_path, model_type == QWEN2 ? 0 : transformer.config.vocab_size);
 
     // build the Sampler
     Sampler sampler;
