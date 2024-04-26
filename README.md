@@ -1,6 +1,6 @@
 # qwen.metal
 
-你可能试过[llama2.c](https://github.com/karpathy/llama2.c)，一个单文件C语言Llama推理实现，这里是一个支持Mac GPU加速的llama2.c，支持中文更强的Qwen模型本地推理。赶紧打开Mac试一下吧~~~
+你可能试过[llama2.c](https://github.com/karpathy/llama2.c)，一个单文件C语言Llama推理实现，这里是一个支持Mac GPU加速的llama2.c，并支持中文更强的通义千问Qwen模型本地推理。赶紧打开Mac试一下吧~~~
 
 代码一共1500行（C和Metal），有以下特点：
 * 没有外部依赖，只要有Mac就可以跑
@@ -29,7 +29,7 @@ make chat
 
 ## 推理tinystories
 
-我们依然兼容llama2.c支持的纯Llama格式模型，可以这样操作来推理llama2.c中使用的stories15M英文模型：
+我们依然兼容llama2.c支持的纯Llama格式模型，按以下来推理llama2.c中使用的stories15M英文模型：
 
 ```
 mkdir stories15m
@@ -47,7 +47,7 @@ TODO
 
 ## LLM推理基础 🦙🦙🦙
 
-Qwen的架构与LLAMA基本一致，有一些小的区别，比如self-attention计算的过程中，Qwen的计算是带有bias的，而Llama没有bias，只有weight。但总体上，类Llama模型的推理流程大致都是以下：
+Qwen的架构与LLAMA基本一致，有一些小的区别，比如self-attention计算的过程中，Qwen的计算是带有bias的，而Llama没有bias，只有weight，以及Qwen的tokenizer是hugging-face风格的，不是Llama那样的基于sentencepiece。但总体上，类Llama模型的推理流程大致都是以下：
 
 1. 首先将一堆权重矩阵读进来。
 2. 自回归（autoregressive）计算的输入，是当前token的embedding。
@@ -59,7 +59,7 @@ Qwen的架构与LLAMA基本一致，有一些小的区别，比如self-attention
 
 ## 设计说明
 
-欢迎复用这个代码，所以写一点设计说明。关于[llama2.c](https://github.com/karpathy/llama2.c)的情况和设计，可以看作者Andrei Karpathy的原代码repo。这里说一些增加的内容。
+欢迎复用这个代码，所以写一点设计说明。关于[llama2.c](https://github.com/karpathy/llama2.c)的情况和设计，可以看作者Andrej Karpathy的原代码repo。这里说一些增加的内容。
 
 ### 主要的优化都针对GEMV
 
@@ -99,6 +99,6 @@ Apple的GPU是他们自己的IP，总体上的文档是比较不足的，通过�
   * Apple GPU 16位性能比较强，但这里没有用到，全是32位计算。
   * 对于本地推理，如前面所说内存带宽是瓶颈，正确方法应该是4位或者8位存储，然后16位或者32位计算（因为计算利用率很低，所以对性能应该不会有影响）。
 
-
-
+## 感谢
+* 优秀的[llama2.c](https://github.com/karpathy/llama2.c)，作者Andrej Karpathy
 

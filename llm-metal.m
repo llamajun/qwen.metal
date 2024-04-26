@@ -11,7 +11,7 @@
 static id<MTLDevice> device;
 static id<MTLLibrary> library;
 static id<MTLCommandQueue> commandQueue;
-static id<MTLComputePipelineState> psoGemv, psoRmsnorm, psoSwiglu, psoAdd, psoRope, 
+static id<MTLComputePipelineState> psoGemv, psoRmsnorm, psoSwiglu, psoAdd, psoRopeQwen, psoRopeLlama, 
                             psoMultiheadAttention, psoSoftmax, psoMultiheadWeightedSum;
 static id<MTLCommandBuffer> commandBuffer;
 static id<MTLComputeCommandEncoder> encoder;
@@ -37,7 +37,8 @@ int lm_init(void) {
     psoGemv = [device newComputePipelineStateWithFunction:[library newFunctionWithName:@"gemv"] error:&error];
     psoRmsnorm = [device newComputePipelineStateWithFunction:[library newFunctionWithName:@"rmsnorm"] error:&error];
     psoSwiglu = [device newComputePipelineStateWithFunction:[library newFunctionWithName:@"swiglu"] error:&error];
-    psoRope = [device newComputePipelineStateWithFunction:[library newFunctionWithName:@"rope"] error:&error];
+    psoRopeQwen = [device newComputePipelineStateWithFunction:[library newFunctionWithName:@"rope_qwen"] error:&error];
+    psoRopeLlama = [device newComputePipelineStateWithFunction:[library newFunctionWithName:@"rope_llama"] error:&error];
     psoMultiheadAttention = [device newComputePipelineStateWithFunction:[library newFunctionWithName:@"multihead_attention"] error:&error];
     psoSoftmax = [device newComputePipelineStateWithFunction:[library newFunctionWithName:@"softmax"] error:&error];
     psoMultiheadWeightedSum = [device newComputePipelineStateWithFunction:[library newFunctionWithName:@"multihead_weighted_sum"] error:&error];
@@ -81,8 +82,8 @@ void lm_add(float *y, float *x, float *w, int n, int yoff, int xoff, int woff) {
     [encoder setBuffer:mtl(y) offset:yoff*sizeof(float) atIndex:0];         // y
     [encoder setBuffer:mtl(x) offset:xoff*sizeof(float) atIndex:1];         // x
     [encoder setBuffer:mtl(w) offset:woff*sizeof(float) atIndex:2];      
-    [encoder setBytes:&n length:sizeof(int) atIndex:4];                     // n
-    MTLSize gridSize = MTLSizeMake(MIN(n, psoAdd.maxTotalThreadsPerThreadgroup), 1, 1);
+    [encoder setBytes:&n length:sizeof(int) atIndex:3];                     // n
+    MTLSize gridSize = MTLSizeMake(MIN(n/4, psoAdd.maxTotalThreadsPerThreadgroup), 1, 1);
     MTLSize threadgroupSize = gridSize;
     [encoder dispatchThreads:gridSize threadsPerThreadgroup:threadgroupSize];
 }
@@ -125,8 +126,10 @@ void lm_swiglu(float *y, float *x, float *x2, int n) {
     [encoder dispatchThreads:gridSize threadsPerThreadgroup:threadgroupSize];
 }
 
-void lm_rope(float *q, float *k, int pos, int nq, int nk, int head_size, float theta, int koff) {
-    [encoder setComputePipelineState:psoRope];
+void lm_rope(int qwen, float *q, float *k, int pos, int nq, int nk, int head_size, float theta, int koff) {
+    static id<MTLComputePipelineState> pso;
+    pso = qwen ? psoRopeQwen : psoRopeLlama;
+    [encoder setComputePipelineState:pso];
     [encoder setBuffer:mtl(q) offset:0 atIndex:0];                          // q
     [encoder setBuffer:mtl(k) offset:koff*sizeof(float) atIndex:1];         // k
     [encoder setBytes:&pos length:sizeof(int) atIndex:2];                   // pos
@@ -134,7 +137,7 @@ void lm_rope(float *q, float *k, int pos, int nq, int nk, int head_size, float t
     [encoder setBytes:&nk length:sizeof(int) atIndex:4];                    // nk
     [encoder setBytes:&head_size length:sizeof(int) atIndex:5];             // head_size
     [encoder setBytes:&theta length:sizeof(float) atIndex:6];               // theta
-    MTLSize gridSize = MTLSizeMake(MIN(nq/2, psoRope.maxTotalThreadsPerThreadgroup), 1, 1);
+    MTLSize gridSize = MTLSizeMake(MIN(nq/2, pso.maxTotalThreadsPerThreadgroup), 1, 1);
     MTLSize threadgroupSize = gridSize;
     [encoder dispatchThreads:gridSize threadsPerThreadgroup:threadgroupSize];
 }

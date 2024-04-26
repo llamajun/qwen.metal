@@ -254,7 +254,10 @@ float* forward(Transformer* transformer, int token, int pos) {
 
         // attention rmsnorm
         // dump("layernorm_weight=", w->rms_att_weight + l*dim, dim);
-        lm_rmsnorm(s->xb, x, w->rms_att_weight, dim, 1e-6f, l*dim);
+        lm_rmsnorm(s->xb, x, w->rms_att_weight, dim, model_type == QWEN2 ? 1e-6f : 1e-5f, l*dim);
+
+        lm_execute();
+        dump("rmsnorm=", s->xb, dim);
 
         // qkv matmuls for this position
         lm_gemv(s->q, s->xb, w->wq, dim, dim, 0, l*dim*dim);            // matmul
@@ -266,9 +269,22 @@ float* forward(Transformer* transformer, int token, int pos) {
             lm_add(s->value_cache, s->value_cache, w->bv, kv_dim, voff, voff, l*kv_dim);
         }
 
+        lm_execute();
+        dump("q", s->q, dim);
+        dump("k", s->k, kv_dim);
+        dump("v", s->v, kv_dim);
+
         // RoPE relative positional encoding: complex-valued rotate q and k in each head
-        // Weight layout is different from paper. See: https://github.com/juncongmoo/pyllama/issues/83
-        lm_rope(s->q, s->key_cache, pos, p->n_heads*head_size, p->n_kv_heads*head_size, head_size, ROPE_THETA, koff);
+
+        if (model_type == QWEN2) 
+            // Weight layout is different: https://github.com/juncongmoo/pyllama/issues/83
+            lm_rope(1, s->q, s->key_cache, pos, p->n_heads*head_size, p->n_kv_heads*head_size, head_size, ROPE_THETA, koff);
+        else 
+            lm_rope(0, s->q, s->key_cache, pos, p->n_heads*head_size, p->n_kv_heads*head_size, head_size, 10000.0f, koff);
+
+        lm_execute();
+        dump("q_rope", s->q, dim);
+        dump("k_rope", s->k, kv_dim);
 
         // multihead attention
         lm_multihead_attention(s->att, s->q, s->key_cache, head_size, p->n_heads, pos+1, loff);
@@ -278,18 +294,38 @@ float* forward(Transformer* transformer, int token, int pos) {
         // final matmul to get the output of the attention
         lm_gemv(s->xb2, s->xb, w->wo, dim, dim, 0, l*dim*dim);
 
+        lm_execute();
+        dump("attention xb2", s->xb2, dim);
+        dump("attention x0", s->x, dim);
+        // printf("dim=%d\n", dim);
+
         // residual connection back into x
         lm_add(x, x, s->xb2, dim, 0, 0, 0);
 
+        lm_execute();
+        dump("attention x", s->x, dim);
+
         // ffn rmsnorm (post_attention_layernorm)
-        lm_rmsnorm(s->xb, x, w->rms_ffn_weight, dim, 1e-6f, l*dim);
+        lm_rmsnorm(s->xb, x, w->rms_ffn_weight, dim, model_type == QWEN2 ? 1e-6f : 1e-5f, l*dim);
+
+        lm_execute();
+        dump("rmsnorm2", s->xb, dim);
 
         // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
         // first calculate self.w1(x) and self.w3(x)
         lm_gemv(s->hb, s->xb, w->w1, dim, hidden_dim, 0, l*dim*hidden_dim);
         lm_gemv(s->hb2, s->xb, w->w3, dim, hidden_dim, 0, l*dim*hidden_dim);
+
+        lm_execute();
+        dump("hb_w1", s->hb, hidden_dim);
+        dump("hb2_w3", s->hb2, hidden_dim);
+
         // SwiGLU non-linearity
         lm_swiglu(s->hb, s->hb, s->hb2, hidden_dim);
+
+        lm_execute();
+        dump("swiglu", s->hb, hidden_dim);
+
         // final matmul to get the output of the ffn
         lm_gemv(s->xb, s->hb, w->w2, hidden_dim, dim, 0, l*dim*hidden_dim);
 
@@ -299,11 +335,13 @@ float* forward(Transformer* transformer, int token, int pos) {
 
     // final rmsnorm
     lm_rmsnorm(x, x, w->rms_final_weight, dim, 1e-06f, 0);
-    // dump("final x = ", x, dim);
 
     // classifier into logits
     lm_gemv(s->logits, x, w->wcls, p->dim, p->vocab_size, 0, 0);
     lm_execute();
+
+    dump("logits = ", s->logits, p->vocab_size);
+
 
     return s->logits;
 }
@@ -331,6 +369,7 @@ typedef struct {
     Merge *merges;              // only for qwen
     int vocab_size;
     int merge_size;
+    unsigned char byte_pieces[512]; // stores all single-byte strings
 } Tokenizer;
 
 int compare_tokens(const void *a, const void *b) {
@@ -361,6 +400,10 @@ void build_tokenizer(Tokenizer* t, char* tokenizer_path, int vocab_size) {
     if (model_type == LLAMA2) {
         t->vocab_scores = (float*)malloc(vocab_size * sizeof(float));
         if (fread(&t->max_token_length, sizeof(int), 1, file) != 1) { fprintf(stderr, "failed read\n"); exit(EXIT_FAILURE); }
+        for (int i = 0; i < 256; i++) {
+            t->byte_pieces[i * 2] = (unsigned char)i;
+            t->byte_pieces[i * 2 + 1] = '\0';
+        }
     }
     for (int i = 0; i < t->vocab_size; i++) {
         unsigned int len = 0;
@@ -411,6 +454,15 @@ void free_tokenizer(Tokenizer *t) {
 
 char* decode(Tokenizer* t, int prev_token, int token) {
     char *piece = t->vocab[token];
+    if (model_type == QWEN2) return piece;      // Qwen does not need more processing
+    // following BOS (1) token, sentencepiece decoder strips any leading whitespace (see PR #89)
+    if (prev_token == 1 && piece[0] == ' ') { piece++; }
+    // careful, some tokens designate raw bytes, and look like e.g. '<0x01>'
+    // parse this and convert and return the actual byte
+    unsigned char byte_val;
+    if (sscanf(piece, "<0x%02hhX>", &byte_val) == 1) {
+        piece = (char*)t->byte_pieces + byte_val * 2;
+    }
     return piece;
 }
 
@@ -438,11 +490,28 @@ int str_lookup(char *str, TokenIndex *sorted_vocab, int vocab_size) {
 void encode(Tokenizer *t, char *text, int *tokens, int *n_tokens) {
     if (text == NULL) {fprintf(stderr, "cannot encode NULL text\n"); exit(EXIT_FAILURE);}
 
-    char* str_buffer = malloc(16);
+    char* str_buffer;
+    if (model_type == QWEN2)
+        str_buffer = malloc(16);
+    else 
+        str_buffer = malloc((t->max_token_length*2 +1 +2) * sizeof(char));
     size_t str_len = strlen(text);
 
     // start at 0 tokens
     *n_tokens = 0;
+
+    if (model_type == LLAMA2) {
+        tokens[(*n_tokens)++] = 1;    // add BOS(=1) token
+
+        // add_dummy_prefix is true by default
+        // so prepend a dummy prefix token to the input string, but only if text != ""
+        // TODO: pretty sure this isn't correct in the general case but I don't have the
+        // energy to read more of the sentencepiece code to figure out what it's doing
+        if (text[0] != '\0') {
+            int dummy_prefix = str_lookup(" ", t->sorted_vocab, t->vocab_size);
+            tokens[(*n_tokens)++] = dummy_prefix;
+        }    
+    }
 
     // Okay UTF-8 time. This will get messy. Here is the reference from Wikipedia:
     // Code point ↔ UTF-8 conversion
@@ -513,6 +582,12 @@ void encode(Tokenizer *t, char *text, int *tokens, int *n_tokens) {
         str_len = 0; // protect against a sequence of stray UTF8 continuation bytes
     }
 
+    if (debug) {
+        for (int i = 0; i < *n_tokens; i++) 
+            printf("%d ", tokens[i]);
+        printf("\n");
+    }
+
     // merge the best consecutive pair each iteration, according the scores in vocab_scores
     while (1) {
         int best_rank = INT32_MAX;      // only for qwen
@@ -543,6 +618,7 @@ void encode(Tokenizer *t, char *text, int *tokens, int *n_tokens) {
             }
         }
 
+        // printf("%d(%d) ", best_idx, best_id);
         if (best_idx == -1) {
             break; // we couldn't find any more pairs to merge, so we're done
         }
@@ -763,8 +839,7 @@ void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, 
 
         // print the token as string, decode it with the Tokenizer object
         // char* piece = decode(tokenizer, token, next);
-        char* piece = decode(tokenizer, 0, token);
-        // printf("%d:%s ", token, piece); 
+        char* piece = model_type == QWEN2 ? decode(tokenizer, 0, token) : decode(tokenizer, token, next);
         safe_printf(piece);     // same as printf("%s", piece), but skips "unsafe" bytes
         fflush(stdout);
         token = next;

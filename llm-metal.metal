@@ -99,7 +99,7 @@ kernel void add (       device float *y,
                         device float *x,
                         device float *x2,
                         const constant int& n,
-                        uint tpitg[[thread_position_in_grid]],
+                        uint tpitg[[thread_position_in_threadgroup]],
                         uint   ntg[[threads_per_threadgroup]] ) {
     for (int i = tpitg; i < n/4; i += ntg) {
         device const float4 *px = (device float4 *) (x + i * 4);
@@ -113,14 +113,14 @@ kernel void add (       device float *y,
 // This rotates pairs of values for each head vector in k and q
 // Weight layout is different from paper. See: https://github.com/juncongmoo/pyllama/issues/83
 // launch with: min(nq/2, max_threadgroup_size) threads
-kernel void rope (      device float *q,
+kernel void rope_qwen ( device float *q,
                         device float *k,
                         const constant int& pos,
                         const constant int& nq,
                         const constant int& nk,
                         const constant int& head_size,
                         const constant float& theta,
-                        uint tpitg[[thread_position_in_grid]],
+                        uint tpitg[[thread_position_in_threadgroup]],
                         uint   ntg[[threads_per_threadgroup]] ) {
     const int halfhead = head_size / 2;
     for (int p = tpitg; p < nq / 2; p += ntg) {
@@ -139,6 +139,39 @@ kernel void rope (      device float *q,
             float v1 = k[off + halfhead + i];
             k[off + i]            = v0 * fcr - v1 * fci;
             k[off + halfhead + i] = v0 * fci + v1 * fcr;
+        } 
+    }
+}
+
+// for llama models, original weight layout
+// launch with: min(nq/2, max_threadgroup_size) threads
+kernel void rope_llama( device float *q,
+                        device float *k,
+                        const constant int& pos,
+                        const constant int& nq,
+                        const constant int& nk,
+                        const constant int& head_size,
+                        const constant float& theta,
+                        uint tpitg[[thread_position_in_threadgroup]],
+                        uint   ntg[[threads_per_threadgroup]] ) {
+    const int halfhead = head_size / 2;
+    for (int p = tpitg; p < nq / 2; p += ntg) {
+        int off = p / halfhead * head_size;
+        int i = p % halfhead;      // index within half of head
+        int ii = i+i;
+        float freq = 1.0f / pow(theta, (float)i / halfhead);
+        float val = pos * freq;
+        float fcr = cos(val);
+        float fci = sin(val);
+        float v0 = q[off + ii];
+        float v1 = q[off + ii + 1];
+        q[off + ii]     = v0 * fcr - v1 * fci;
+        q[off + ii + 1] = v0 * fci + v1 * fcr;
+        if (p < nk / 2) {
+            float v0 = k[off + ii];
+            float v1 = k[off + ii + 1];
+            k[off + ii]     = v0 * fcr - v1 * fci;
+            k[off + ii + 1] = v0 * fci + v1 * fcr;
         } 
     }
 }

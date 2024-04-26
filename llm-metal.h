@@ -47,7 +47,8 @@ void lm_rmsnorm(float *y, float *x, float *w, int n, float eps, int woff);
 void lm_swiglu(float *y, float *x, float *x2, int n);
 
 // RoPE - Rotary Positional Embedding
-void lm_rope(float *q, float *k, int pos, int nq, int nk, int head_size, float theta, int koff);
+// qwen: 1 if qwen version of rope, 0 if not
+void lm_rope(int qwen, float *q, float *k, int pos, int nq, int nk, int head_size, float theta, int koff);
 
 // The following 3 together are the multihead attention.
 // d - total rows of key to process
