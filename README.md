@@ -2,7 +2,7 @@
 
 你可能试过[llama2.c](https://github.com/karpathy/llama2.c)，一个单文件C语言Llama推理实现，这里是一个支持Mac GPU加速的llama2.c，并支持中文更强的通义千问Qwen模型本地推理。赶紧打开Mac试一下吧~~~
 
-代码一共1500行（C和Metal），有以下特点：
+代码简短一共1600行（C和Metal），有以下特点：
 * 没有外部依赖，只要有Mac就可以跑
 * GPU加速具有较好的性能
 * 基于llama2.c的代码，清晰易懂
@@ -41,7 +41,7 @@ echo "model=llama2" > stories15m/config.ini
 make stories
 ```
 
-性能上，stories15m可以轻松跑到300 t/s以上。
+Stories15m可以轻松跑到300 t/s以上。
 
 ## 推理Qwen1.5-7B-Chat
 
@@ -108,6 +108,14 @@ Apple的GPU是他们自己的IP，总体上的文档是比较不足的，通过�
 * Qwen的tokenizer是GPT2 tokenizer（通过merges table列出需要合并的token对），而Llama是sentencepiece（每个token有一个score分值）。还有特殊token等一些小区别。
 * RoPE相关数据排列顺序不同，见[这个issue](https://github.com/juncongmoo/pyllama/issues/83)。
 * RMS norm的epsilon和RoPE的theta参数不同。
+
+## TODO
+
+* 支持16,8或者4位的模型
+* 支持GQA（分组查询注意力）
+* 支持GGUF模型文件格式
+* 支持Llama 3
+* CUDA?
 
 ## 感谢
 * 优秀的[llama2.c](https://github.com/karpathy/llama2.c)，作者Andrej Karpathy
