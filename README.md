@@ -41,13 +41,15 @@ echo "model=llama2" > stories15m/config.ini
 make stories
 ```
 
+性能上，stories15m可以轻松跑到300 t/s以上。
+
 ## 推理Qwen1.5-7B-Chat
 
 TODO
 
 ## LLM推理基础 🦙🦙🦙
 
-Qwen的架构与LLAMA基本一致，有一些小的区别，比如self-attention计算的过程中，Qwen的计算是带有bias的，而Llama没有bias，只有weight，以及Qwen的tokenizer是hugging-face风格的，不是Llama那样的基于sentencepiece。但总体上，类Llama模型的推理流程大致都是以下：
+Qwen的架构与LLAMA基本一致，有一些小的区别，总体上，类Llama模型的推理流程大致都是以下：
 
 1. 首先将一堆权重矩阵读进来。
 2. 自回归（autoregressive）计算的输入，是当前token的embedding。
@@ -98,6 +100,14 @@ Apple的GPU是他们自己的IP，总体上的文档是比较不足的，通过�
   * 规模最小的M1 GPU同时跑24个threadgroups，其它的GPU则可以跑更多。按这个计算，如果要填满整个GPU，需要24*1024=24576个线程。
   * Apple GPU 16位性能比较强，但这里没有用到，全是32位计算。
   * 对于本地推理，如前面所说内存带宽是瓶颈，正确方法应该是4位或者8位存储，然后16位或者32位计算（因为计算利用率很低，所以对性能应该不会有影响）。
+
+### 与llama2.c的兼容
+
+代码会读取模型目录下的`model.ini`文件，根据是llama2还是qwen2行为略有不同，以实现兼容性，在代码中依据`model_type`判断。具体区别有：
+* Self-attention计算的过程中，Qwen的计算是带有bias的，而Llama没有bias，只有weight，所以Qwen多`bq,bk,bv`三个偏移参数向量。
+* Qwen的tokenizer是GPT2 tokenizer（通过merges table列出需要合并的token对），而Llama是sentencepiece（每个token有一个score分值）。还有特殊token等一些小区别。
+* RoPE相关数据排列顺序不同，见[这个issue](https://github.com/juncongmoo/pyllama/issues/83)。
+* RMS norm的epsilon和RoPE的theta参数不同。
 
 ## 感谢
 * 优秀的[llama2.c](https://github.com/karpathy/llama2.c)，作者Andrej Karpathy

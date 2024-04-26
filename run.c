@@ -256,9 +256,6 @@ float* forward(Transformer* transformer, int token, int pos) {
         // dump("layernorm_weight=", w->rms_att_weight + l*dim, dim);
         lm_rmsnorm(s->xb, x, w->rms_att_weight, dim, model_type == QWEN2 ? 1e-6f : 1e-5f, l*dim);
 
-        lm_execute();
-        dump("rmsnorm=", s->xb, dim);
-
         // qkv matmuls for this position
         lm_gemv(s->q, s->xb, w->wq, dim, dim, 0, l*dim*dim);            // matmul
         lm_gemv(s->key_cache, s->xb, w->wk, dim, kv_dim, koff, l*dim*kv_dim);     
@@ -269,11 +266,6 @@ float* forward(Transformer* transformer, int token, int pos) {
             lm_add(s->value_cache, s->value_cache, w->bv, kv_dim, voff, voff, l*kv_dim);
         }
 
-        lm_execute();
-        dump("q", s->q, dim);
-        dump("k", s->k, kv_dim);
-        dump("v", s->v, kv_dim);
-
         // RoPE relative positional encoding: complex-valued rotate q and k in each head
 
         if (model_type == QWEN2) 
@@ -281,10 +273,6 @@ float* forward(Transformer* transformer, int token, int pos) {
             lm_rope(1, s->q, s->key_cache, pos, p->n_heads*head_size, p->n_kv_heads*head_size, head_size, ROPE_THETA, koff);
         else 
             lm_rope(0, s->q, s->key_cache, pos, p->n_heads*head_size, p->n_kv_heads*head_size, head_size, 10000.0f, koff);
-
-        lm_execute();
-        dump("q_rope", s->q, dim);
-        dump("k_rope", s->k, kv_dim);
 
         // multihead attention
         lm_multihead_attention(s->att, s->q, s->key_cache, head_size, p->n_heads, pos+1, loff);
@@ -294,37 +282,19 @@ float* forward(Transformer* transformer, int token, int pos) {
         // final matmul to get the output of the attention
         lm_gemv(s->xb2, s->xb, w->wo, dim, dim, 0, l*dim*dim);
 
-        lm_execute();
-        dump("attention xb2", s->xb2, dim);
-        dump("attention x0", s->x, dim);
-        // printf("dim=%d\n", dim);
-
         // residual connection back into x
         lm_add(x, x, s->xb2, dim, 0, 0, 0);
 
-        lm_execute();
-        dump("attention x", s->x, dim);
-
         // ffn rmsnorm (post_attention_layernorm)
         lm_rmsnorm(s->xb, x, w->rms_ffn_weight, dim, model_type == QWEN2 ? 1e-6f : 1e-5f, l*dim);
-
-        lm_execute();
-        dump("rmsnorm2", s->xb, dim);
 
         // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
         // first calculate self.w1(x) and self.w3(x)
         lm_gemv(s->hb, s->xb, w->w1, dim, hidden_dim, 0, l*dim*hidden_dim);
         lm_gemv(s->hb2, s->xb, w->w3, dim, hidden_dim, 0, l*dim*hidden_dim);
 
-        lm_execute();
-        dump("hb_w1", s->hb, hidden_dim);
-        dump("hb2_w3", s->hb2, hidden_dim);
-
         // SwiGLU non-linearity
         lm_swiglu(s->hb, s->hb, s->hb2, hidden_dim);
-
-        lm_execute();
-        dump("swiglu", s->hb, hidden_dim);
 
         // final matmul to get the output of the ffn
         lm_gemv(s->xb, s->hb, w->w2, hidden_dim, dim, 0, l*dim*hidden_dim);
@@ -339,9 +309,6 @@ float* forward(Transformer* transformer, int token, int pos) {
     // classifier into logits
     lm_gemv(s->logits, x, w->wcls, p->dim, p->vocab_size, 0, 0);
     lm_execute();
-
-    dump("logits = ", s->logits, p->vocab_size);
-
 
     return s->logits;
 }
