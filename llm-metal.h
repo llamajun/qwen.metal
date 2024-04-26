@@ -9,12 +9,12 @@
 //
 // 1. Metal buffer management: lm_alloc() and lm_free()
 //
-// 2. Operator command queueing: lm_add(), lm_gemv(), lm_rmsnorm(), ...
+// 2. Command queueing: lm_add(), lm_gemv(), lm_rmsnorm(), ...
 //    Calling these enqueues GPU operations on the buffers allocated by lm_alloc().
 //    Building up a sizable command queue is necessary to achieve good GPU performance
 //    as it amortizes the launching costs of GPU commands.
 //
-// 3. Operator command execution: op_execute(). It runs and empties the command queue.
+// 3. Command execution: op_execute(). It runs and empties the command queue.
 //
 
 // Call this before everthing else.
@@ -28,7 +28,7 @@ int lm_alloc(float **buf, unsigned long long size);
 // Free a buffer allocated with lm_alloc()
 void lm_free(float *p);
 
-// The following only add the operator into the command queue.
+// The following only add the command into the command queue.
 // Actual computation happens when op_execute() is called.
 // Offsets (xoff, yoff, woff) are in number of floats.
 

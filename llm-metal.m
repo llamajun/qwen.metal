@@ -1,12 +1,15 @@
+// LLM routines for Apple Metal
+// llamajun, 2024.4
+//
+// This file assumes ARC is enabled. For instance, `buffers` retain references to MTLBuffer objects.
+// And rely on ARC to free them when lm_free() is called. 
+
 #import <unistd.h>
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <sys/time.h>
 
 #include "llm-metal.h"
-
-// This file assumes ARC is enabled. For instance, `buffers` retain references to MTLBuffer objects.
-// And rely on ARC to free them when lm_free() is called. 
 
 static id<MTLDevice> device;
 static id<MTLLibrary> library;
