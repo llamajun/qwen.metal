@@ -27,6 +27,20 @@ make chat
 
 性能方面，在我的2021款MacBook Pro M1上面，可以跑到25 tokens/s。我们使用的是32位float计算，这个速度基本就把系统的内存带宽占满了（最大内存带宽是66.7 GB/s），所以是不错的性能。
 
+## 推理tinystories
+
+我们依然兼容llama2.c支持的纯Llama格式模型，可以这样操作来推理llama2.c中使用的stories15M英文模型：
+
+```
+mkdir stories15m
+wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories15M.bin -o stories15m/model.bin
+wget https://github.com/karpathy/llama2.c/raw/master/tokenizer.bin -o stories15m/tokenizer.bin
+echo "model=llama2" > stories15m/config.ini
+
+# 然后执行推理
+make stories
+```
+
 ## 推理Qwen1.5-7B-Chat
 
 TODO

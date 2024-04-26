@@ -260,9 +260,11 @@ float* forward(Transformer* transformer, int token, int pos) {
         lm_gemv(s->q, s->xb, w->wq, dim, dim, 0, l*dim*dim);            // matmul
         lm_gemv(s->key_cache, s->xb, w->wk, dim, kv_dim, koff, l*dim*kv_dim);     
         lm_gemv(s->value_cache, s->xb, w->wv, dim, kv_dim, voff, l*dim*kv_dim);
-        lm_add(s->q, s->q, w->bq, dim, 0, 0, l*dim);                    // bias
-        lm_add(s->key_cache, s->key_cache, w->bk, kv_dim, koff, koff, l*kv_dim);
-        lm_add(s->value_cache, s->value_cache, w->bv, kv_dim, voff, voff, l*kv_dim);
+        if (model_type == QWEN2) {
+            lm_add(s->q, s->q, w->bq, dim, 0, 0, l*dim);                    // bias
+            lm_add(s->key_cache, s->key_cache, w->bk, kv_dim, koff, koff, l*kv_dim);
+            lm_add(s->value_cache, s->value_cache, w->bv, kv_dim, voff, voff, l*kv_dim);
+        }
 
         // RoPE relative positional encoding: complex-valued rotate q and k in each head
         // Weight layout is different from paper. See: https://github.com/juncongmoo/pyllama/issues/83
